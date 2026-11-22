@@ -1,0 +1,15 @@
+# vegas26: stop services that have nothing to do on this phone.
+#
+# Motorola's wireless-charging HAL (vendor, class hal) polls
+# /sys/class/power_supply/wireless/device/wlc_st_changed every 100 ms forever; this model has no
+# wireless charging, so that node never exists (~650 log lines per minute, constant wakeups).
+on property:init.svc.vendor.mot.wlc-hal=running && property:ro.vendor.hw.device=vegas
+    stop vendor.mot.wlc-hal
+
+# TrebleDroid ships OPPO/OnePlus fingerprint compat HALs for every device; here they only sit
+# ~100 s per boot and log SELinux denials. The real fingerprint HAL is the vendor one.
+on property:init.svc.fps_hal.oppo.compat=running && property:ro.vendor.hw.device=vegas
+    stop fps_hal.oppo.compat
+
+on property:init.svc.fps_hal.oplus.compat=running && property:ro.vendor.hw.device=vegas
+    stop fps_hal.oplus.compat

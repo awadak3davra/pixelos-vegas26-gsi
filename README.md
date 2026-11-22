@@ -316,6 +316,11 @@ and the fix.
 - Auto-brightness uses the stock Motorola curve from the vendor overlay. If it seems frozen, check that
   "adaptive brightness one shot" (`auto_brightness_one_shot`) is off.
 - Centered hole-punch cutout, battery percentage, carrier config for Wi-Fi calling and VoLTE defaults.
+- The device reports the stock model name, `moto g power - 2026` (brand stays `google`, which PixelOS
+  and Google apps use for Pixel features).
+- `cleanup/vegas-cleanup.rc` stops Motorola's wireless-charging HAL (this model has no wireless charging;
+  the HAL polled a missing sysfs node every 100 ms) and TrebleDroid's OPPO/OnePlus fingerprint compat
+  HALs, which have nothing to do on this phone.
 - NFC, RKP, SurfaceFlinger and double tap to wake findings were also proposed (pull request) to
   [qfertig/vegas26-gsi](https://github.com/qfertig/vegas26-gsi) for LineageOS users.
 
@@ -465,7 +470,7 @@ build) needs a factory reset in recovery.
 - `overlay/`: framework defaults (DT2W sensor, battery percentage), centered cutout, Aperture aux
   camera, carrier config.
 - `usb/`: AOA USB IDs for wired Android Auto. `esim/`: eSIM manager module (blobs not included).
-- `dt2w/`, `actions/`, `nfc/`, `sf/`, `privapp/`, `sepolicy/`, `preinstall/`: the other fixes.
+- `dt2w/`, `actions/`, `nfc/`, `sf/`, `privapp/`, `cleanup/`, `sepolicy/`, `preinstall/`: the other fixes.
 - `brightness/NOTES.md`, `dt2w/NOTES.md`, `actions/NOTES.md`: how those were worked out.
 - `scripts/`: build, patching and on-device diagnostics.
 

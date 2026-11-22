@@ -64,6 +64,11 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     privapp-permissions-vegas-extra.xml
 
+# Stop the wireless-charging HAL (no WLC on this model, it polls forever) and phh's OPPO/OnePlus
+# fingerprint compat HALs, see cleanup/
+PRODUCT_PACKAGES += \
+    vegas-cleanup.rc
+
 # Double tap to wake (FocalTech gesture node + KEY_F4 -> WAKEUP keylayout), see dt2w/
 PRODUCT_PACKAGES += \
     vegas-dt2w.sh \

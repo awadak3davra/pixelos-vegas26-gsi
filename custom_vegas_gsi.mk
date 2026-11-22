@@ -31,7 +31,7 @@ PRODUCT_DEVICE := tdgsi_arm64_ab
 PRODUCT_BRAND := google
 PRODUCT_SYSTEM_BRAND := google
 PRODUCT_MANUFACTURER := google
-PRODUCT_MODEL := PixelOS GSI (vegas26)
+PRODUCT_MODEL := moto g power - 2026
 
 # Overwrite the inherited "emulator" characteristics
 PRODUCT_CHARACTERISTICS := device

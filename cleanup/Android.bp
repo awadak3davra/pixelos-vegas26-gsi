@@ -1,0 +1,6 @@
+// vegas26: stop services that are useless on this phone (see vegas-cleanup.rc)
+prebuilt_etc {
+    name: "vegas-cleanup.rc",
+    src: "vegas-cleanup.rc",
+    sub_dir: "init",
+}
