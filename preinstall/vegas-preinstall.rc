@@ -1,0 +1,7 @@
+# Runs /system/bin/vegas-preinstall.sh (labelled phhsu_exec, like phh-on-boot.sh) once boot completes.
+service vegas_preinstall /system/bin/vegas-preinstall.sh
+    oneshot
+    disabled
+
+on property:sys.boot_completed=1
+    start vegas_preinstall

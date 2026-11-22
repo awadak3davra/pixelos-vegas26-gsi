@@ -1,0 +1,53 @@
+From cc2c83916f31dd8e762da4252983578ccf7afd8a Mon Sep 17 00:00:00 2001
+From: PixelOS vegas builder <builder@localhost>
+Date: Fri, 20 Nov 2026 19:16:49 -0800
+Subject: [PATCH] Smart5gService: write absolute masks for REASON_POWER
+
+update() OR-ed NR into the current REASON_POWER value. When that reason was never set, the value reported is the user preference from first boot (2G/3G only when ro.telephony.default_network is unset), so the service stored 2G/3G|NR as the power restriction and LTE stayed blocked forever (no service on US carriers, no 5G entries in Settings). Write all-types or all-but-NR instead.
+
+Change-Id: I4df37226a4d23dbf9e55776f5e2b31138a6557c2
+---
+ .../com/android/server/Smart5gService.java    | 24 +++++++++----------
+ 1 file changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/services/core/java/com/android/server/Smart5gService.java b/services/core/java/com/android/server/Smart5gService.java
+index c36fc9615..05cf97b00 100644
+--- a/services/core/java/com/android/server/Smart5gService.java
++++ b/services/core/java/com/android/server/Smart5gService.java
+@@ -238,21 +238,21 @@ public class Smart5gService extends SystemService {
+             final TelephonyManager tm = mTelephonyManager.createForSubscriptionId(subId);
+             final long supportedNrBitmask = getSupportedNrBitmask(tm, subId);
+             if (supportedNrBitmask == 0) continue;
+-            long allowedNetworkTypes = tm.getAllowedNetworkTypesForReason(
++            // ALLOWED_NETWORK_TYPES_REASON_POWER is owned by this service: always write the full
++            // target mask (everything, or everything but NR). Read-modify-write of the current
++            // value is wrong because an unset reason reports whatever the user reason held at
++            // first boot (e.g. 2G/3G only), and OR-ing NR into it would then lock LTE out.
++            final long allNetworkTypes = TelephonyManager.getAllNetworkTypesBitmask();
++            final long currentPowerTypes = tm.getAllowedNetworkTypesForReason(
+                     ALLOWED_NETWORK_TYPES_REASON_POWER);
+-            final boolean is5gAllowed = (allowedNetworkTypes & supportedNrBitmask) != 0;
+             final boolean shouldDisable = shouldDisable5g(subId);
+-            dlog("update: subId=" + subId + " is5gAllowed=" + is5gAllowed + " shouldDisable="
+-                    + shouldDisable);
+-            if (shouldDisable && is5gAllowed) {
+-                allowedNetworkTypes &= ~supportedNrBitmask;
+-            } else if (!shouldDisable && !is5gAllowed) {
+-                allowedNetworkTypes |= supportedNrBitmask;
+-            } else {
+-                continue;
+-            }
++            final long targetPowerTypes = shouldDisable
++                    ? (allNetworkTypes & ~supportedNrBitmask) : allNetworkTypes;
++            dlog("update: subId=" + subId + " shouldDisable=" + shouldDisable
++                    + " current=" + currentPowerTypes + " target=" + targetPowerTypes);
++            if (currentPowerTypes == targetPowerTypes) continue;
+             tm.setAllowedNetworkTypesForReason(ALLOWED_NETWORK_TYPES_REASON_POWER,
+-                    allowedNetworkTypes);
++                    targetPowerTypes);
+         }
+     }
+ 
+-- 
+2.43.0
+

@@ -1,0 +1,3 @@
+# run in the same (permissive) domain as TrebleDroid's phh-on-boot.sh
+/system/bin/vegas-preinstall.sh u:object_r:phhsu_exec:s0
+/system/bin/vegas-dt2w.sh u:object_r:phhsu_exec:s0

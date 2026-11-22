@@ -1,0 +1,12 @@
+// vegas26 double-tap-to-wake (see vegas-dt2w.sh)
+sh_binary {
+    name: "vegas-dt2w.sh",
+    src: "vegas-dt2w.sh",
+    init_rc: ["vegas-dt2w.rc"],
+}
+
+prebuilt_usr_keylayout {
+    name: "vegas-double-tap.kl",
+    src: "double-tap.kl",
+    filename: "double-tap.kl",
+}

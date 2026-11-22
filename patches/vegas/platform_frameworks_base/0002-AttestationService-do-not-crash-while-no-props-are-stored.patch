@@ -1,0 +1,32 @@
+From 0f6a574d6c54f79195d7a5cbdf56613417209e5b Mon Sep 17 00:00:00 2001
+From: vegas <vegas@localhost>
+Date: Sat, 21 Nov 2026 11:08:43 -0800
+Subject: [PATCH] AttestationService: do not crash while no props are stored
+ yet
+
+Settings.Secure.FETCHED_PIF is null on a fresh install, so
+savedProps.equals(props) threw a NullPointerException on every run and the
+certified props were never stored: Play Integrity got no spoofed build.
+Compare the other way round and ignore empty responses.
+
+Change-Id: I6af93fdfafaa82a17a59ee88a15aed49499297c0
+---
+ .../core/java/com/android/server/custom/AttestationService.java | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/custom/AttestationService.java b/services/core/java/com/android/server/custom/AttestationService.java
+index 6cbd23b13..ab05fe6be 100644
+--- a/services/core/java/com/android/server/custom/AttestationService.java
++++ b/services/core/java/com/android/server/custom/AttestationService.java
+@@ -133,7 +133,7 @@ public final class AttestationService extends SystemService {
+                         mContext.getContentResolver(), Settings.Secure.FETCHED_PIF);
+                 String props = fetchProps();
+ 
+-                if (props != null && !savedProps.equals(props)) {
++                if (props != null && !props.isEmpty() && !props.equals(savedProps)) {
+                     dlog("Found new props");
+                     Settings.Secure.putString(
+                             mContext.getContentResolver(), Settings.Secure.FETCHED_PIF, props);
+-- 
+2.43.0
+

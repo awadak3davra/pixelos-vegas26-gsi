@@ -1,0 +1,11 @@
+# never commit binaries, images, keys or device dumps
+*.apk
+*.img
+*.img.xz
+*.zip
+*.pk8
+*.pem
+*.jks
+*.keystore
+keys/
+logs/

@@ -1,0 +1,6 @@
+// vegas26: SurfaceFlinger defaults (see vegas-sf.rc)
+prebuilt_etc {
+    name: "vegas-sf.rc",
+    src: "vegas-sf.rc",
+    sub_dir: "init",
+}

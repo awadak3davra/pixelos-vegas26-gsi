@@ -1,0 +1,6 @@
+// vegas26: AOA VID/PID for wired Android Auto (see usb-aoa-gsi.rc)
+prebuilt_etc {
+    name: "usb-aoa-gsi.rc",
+    src: "usb-aoa-gsi.rc",
+    sub_dir: "init",
+}

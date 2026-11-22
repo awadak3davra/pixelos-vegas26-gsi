@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PixelOS 16.2 (sixteen-qpr2) GSI for Moto G Power 2026 (XT2617V, vegas26, MT6835).
+  Drop into .repo/local_manifests/ of a PixelOS sixteen-qpr2 tree, then `repo sync`.
+  TrebleDroid repos are pinned to their android-16.0 branches (no QPR2/17 branch upstream);
+  the TrebleDroid platform patch set comes from MisterZtr/LineageOS_gsi (lineage-23.2), pinned.
+-->
+<manifest>
+    <remote name="td-github" fetch="https://github.com/" />
+
+    <!-- TrebleDroid core -->
+    <project path="device/phh/treble"        name="TrebleDroid/device_phh_treble"        remote="td-github" revision="android-16.0" />
+    <project path="treble_app"               name="TrebleDroid/treble_app"               remote="td-github" revision="master" />
+    <project path="vendor/hardware_overlay"  name="TrebleDroid/vendor_hardware_overlay"  remote="td-github" revision="main" />
+    <project path="vendor/interfaces"        name="TrebleDroid/vendor_interfaces"        remote="td-github" revision="android-16.0" />
+    <project path="vendor/vndk-tests"        name="phhusson/vendor_vndk-tests"           remote="td-github" revision="master" />
+    <project path="vendor/lptools"           name="phhusson/vendor_lptools"              remote="td-github" revision="master" />
+    <project path="vendor/magisk"            name="phhusson/vendor_magisk"               remote="td-github" revision="android-10.0" />
+
+    <!-- Extra VNDK snapshots (PixelOS ships v31-v34); TrebleDroid restores the v29/v30 APEXes -->
+    <project path="prebuilts/vndk/v28" name="naz664/prebuilts_vndk_v28" remote="td-github" clone-depth="1" revision="master" />
+    <project path="prebuilts/vndk/v29" name="platform/prebuilts/vndk/v29" remote="aosp" clone-depth="1" revision="bef5d37dda9360940964f097d612c8032e140961" />
+    <project path="prebuilts/vndk/v30" name="platform/prebuilts/vndk/v30" remote="aosp" clone-depth="1" revision="5f9884aa352825291757dfd6694b874ad8c1805e" />
+
+    <!-- vendor.qti.*.am-V1.0-java + QcRilAm: TrebleApp's QtiAudio thread loads these classes on
+         every device and crashes (NoClassDefFoundError IQcRilAudio) when they are missing -->
+    <project path="packages/apps/QcRilAm" name="AndyCGYan/android_packages_apps_QcRilAm" remote="td-github" revision="master" />
+
+    <!-- MediaTek IMS (VoLTE/VoWiFi on MT6835): com.mediatek.ims + its two RROs -->
+    <project path="vendor/mediatek/ims" name="techyminati/android_vendor_mediatek_ims" remote="td-github" revision="android-16-qpr2" />
+
+    <!-- TrebleDroid platform patches (android-16.0.0_r4-td), consumed by scripts/apply-patches.sh -->
+    <project path="treble_patches" name="MisterZtr/LineageOS_gsi" remote="td-github" revision="7bf212f449d1aa253ebc97b1ab3c4924be88effa" />
+</manifest>

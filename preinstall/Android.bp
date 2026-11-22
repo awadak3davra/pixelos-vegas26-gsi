@@ -1,0 +1,20 @@
+// Apps installed once on first boot as regular (uninstallable) user apps, plus their configs.
+prebuilt_etc {
+    name: "vegas-preinstall-gcam",
+    src: "GCam.apk",
+    sub_dir: "vegas-preinstall",
+    filename: "GCam.apk",
+}
+
+prebuilt_etc {
+    name: "vegas-preinstall-gcam-config",
+    src: "vegas-gcam.xml",
+    sub_dir: "vegas-preinstall",
+    filename: "vegas-gcam.xml",
+}
+
+sh_binary {
+    name: "vegas-preinstall.sh",
+    src: "vegas-preinstall.sh",
+    init_rc: ["vegas-preinstall.rc"],
+}

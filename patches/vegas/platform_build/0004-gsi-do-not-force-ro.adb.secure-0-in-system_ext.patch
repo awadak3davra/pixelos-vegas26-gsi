@@ -1,0 +1,29 @@
+From 23174bda0e18ba5445d7665776612c7662b673e1 Mon Sep 17 00:00:00 2001
+From: vegas26 <vegas26@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 23:22:11 -0800
+Subject: [PATCH] gsi: do not force ro.adb.secure=0 in system_ext
+
+vendor/lineage sets ro.adb.secure from WITH_ADB_INSECURE; the GSI board
+prop hard-coding 0 collides with it (duplicate sysprop) in release builds
+and would leave adb without authorization.
+
+Change-Id: I10e83b4985f9d7d33f6b134e2b5d994c81e69ca0
+---
+ target/board/gsi_system_ext.prop | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/target/board/gsi_system_ext.prop b/target/board/gsi_system_ext.prop
+index 780aadc..776fa0b 100644
+--- a/target/board/gsi_system_ext.prop
++++ b/target/board/gsi_system_ext.prop
+@@ -2,7 +2,6 @@
+ ro.cp_system_other_odex=0
+ 
+ # GSI always disables adb authentication
+-ro.adb.secure=0
+ 
+ # GSI disables non-AOSP nnapi extensions on product partition
+ ro.nnapi.extensions.deny_on_product=true
+-- 
+2.43.0
+

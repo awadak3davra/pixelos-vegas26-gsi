@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Show the battery percentage in the status bar by default -->
+    <bool name="config_defaultBatteryPercentageSetting">true</bool>
+
+    <!-- Double tap to wake: with gesture=49 (vegas-dt2w.sh) the FocalTech driver reports a
+         screen-off double tap as KEY_F4 on the input device "double-tap". The vendor sensor
+         sub-HAL (sensors.moto.so, DoubleTapSensor) EVIOCGRABs that device at start and turns it
+         into the wake-up sensor "dt-gesture" (com.motorola.sensor.double_tap, special trigger),
+         so InputReader never sees the key. SystemUI Doze listens to this sensor (needs the
+         DozeSensors non-one-shot patch) and gently wakes the device on it.
+         Not "Mot Tap" (com.motorola.sensor.tap): that one is a sensor-hub sensor, not touch. -->
+    <string name="config_dozeDoubleTapSensorType" translatable="false">com.motorola.sensor.double_tap</string>
+    <bool name="config_dozeDoubleTapGestureEnabled">true</bool>
+
+    <!-- eSIM: the eUICC is soldered on physical slot 1 (as on stock and the LineageOS vegas26 tree). -->
+    <integer-array name="non_removable_euicc_slots" translatable="false">
+        <item>1</item>
+    </integer-array>
+</resources>

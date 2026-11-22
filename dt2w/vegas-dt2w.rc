@@ -1,0 +1,17 @@
+service vegas_dt2w /system/bin/vegas-dt2w.sh boot
+    oneshot
+    disabled
+
+service vegas_dt2w_phh /system/bin/vegas-dt2w.sh phh
+    oneshot
+    disabled
+
+on property:sys.boot_completed=1
+    start vegas_dt2w
+
+# touch driver re-initialises on resume from its "ready" signal: re-apply
+on property:vendor.hw.touch.status=ready
+    start vegas_dt2w
+
+on property:persist.sys.phh.xiaomi.dt2w=*
+    start vegas_dt2w_phh

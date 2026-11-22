@@ -1,0 +1,6 @@
+// vegas26: start the vendor NXP NFC HAL on the GSI (see nfc-hal-gsi.rc)
+prebuilt_etc {
+    name: "nfc-hal-gsi.rc",
+    src: "nfc-hal-gsi.rc",
+    sub_dir: "init",
+}

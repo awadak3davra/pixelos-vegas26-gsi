@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- vegas26: carrier-independent IMS defaults. CarrierConfig reads res/xml/vendor.xml after the
+     per-carrier assets, so these values apply on top of any carrier. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.vegas26.carrierconfig">
+    <application android:hasCode="false" android:label="Vegas26 CarrierConfig defaults"/>
+    <overlay android:targetPackage="com.android.carrierconfig" android:priority="1" android:isStatic="true"/>
+</manifest>

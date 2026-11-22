@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- No components: a persistent, direct-boot-aware system app whose Application listens to the
+     vendor ChopChop wake-up sensor for the whole uptime (see NOTES.md). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.pixelos.vegas.actions"
+    android:sharedUserId="android.uid.system">
+
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:name=".VegasActionsApp"
+        android:label="Vegas Actions"
+        android:persistent="true"
+        android:directBootAware="true"
+        android:allowBackup="false" />
+</manifest>

@@ -1,0 +1,42 @@
+From 5a8ed97b54e13e69eb068c45b807ff68a265ddad Mon Sep 17 00:00:00 2001
+From: vegas <vegas@localhost>
+Date: Sat, 21 Nov 2026 09:53:17 -0800
+Subject: [PATCH] libprocessgroup: run SurfaceFlinger main and RenderEngine on
+ all cores
+
+On MT6835 (2x A76 + 6x A55) the AOSP default puts the SF main thread and
+RenderEngine into the system-background cpuset (cpus 0-5, little cores
+only). The stock MediaTek SurfaceFlinger moves them itself (cpupolicy +
+FPSGO); the GSI SurfaceFlinger does not, which shows up as SF stuffing and
+missed frames. Use the foreground cpuset (0-7) instead.
+
+Change-Id: Ida7b4bde6ee5299021eb86277ffefc87023ee555
+---
+ libprocessgroup/profiles/task_profiles.json | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/libprocessgroup/profiles/task_profiles.json b/libprocessgroup/profiles/task_profiles.json
+index 1d23d9c..35c0043 100644
+--- a/libprocessgroup/profiles/task_profiles.json
++++ b/libprocessgroup/profiles/task_profiles.json
+@@ -570,7 +570,7 @@
+           "Params":
+           {
+             "Controller": "cpuset",
+-            "Path": "system-background"
++            "Path": "foreground"
+           }
+         }
+       ]
+@@ -583,7 +583,7 @@
+           "Params":
+           {
+             "Controller": "cpuset",
+-            "Path": "system-background"
++            "Path": "foreground"
+           }
+         }
+       ]
+-- 
+2.43.0
+

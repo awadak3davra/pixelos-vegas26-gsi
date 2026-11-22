@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.vegas26.framework.defaults">
+    <application android:hasCode="false" android:label="Vegas26 framework defaults"/>
+    <overlay android:targetPackage="android" android:priority="2" android:isStatic="true"/>
+</manifest>

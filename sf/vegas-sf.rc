@@ -1,0 +1,9 @@
+# vegas26: one-time reset of a GL backpressure value stored in /data by earlier builds or the
+# Treble app (persist.sys.phh.enable_sf_gl_backpressure=1). vndk.rc copies it into
+# debug.sf.enable_gl_backpressure, which made Settings transitions stutter. Runs once, after
+# persistent properties are loaded and before SurfaceFlinger reads the value; the user can
+# still turn it back on in Phh Treble Settings later.
+on property:ro.persistent_properties.ready=true && property:persist.sys.vegas.sf_glbp_reset=0
+    setprop persist.sys.phh.enable_sf_gl_backpressure 0
+    setprop debug.sf.enable_gl_backpressure 0
+    setprop persist.sys.vegas.sf_glbp_reset 1

@@ -1,0 +1,6 @@
+# vegas26 FocalTech "double-tap" input device: the touch driver reports a double tap on the
+# screen-off panel as KEY_F4 (62). Fallback only: the vendor sensor HAL (sensors.moto.so)
+# EVIOCGRABs this device and turns it into the "dt-gesture" sensor, which SystemUI Doze uses.
+# This layout only matters if that HAL is not running.
+key 62    WAKEUP
+key 59    WAKEUP

@@ -1,0 +1,7 @@
+// vegas26: privapp allowlist gaps (see privapp-permissions-vegas-extra.xml)
+prebuilt_etc {
+    name: "privapp-permissions-vegas-extra.xml",
+    src: "privapp-permissions-vegas-extra.xml",
+    sub_dir: "permissions",
+    product_specific: true,
+}

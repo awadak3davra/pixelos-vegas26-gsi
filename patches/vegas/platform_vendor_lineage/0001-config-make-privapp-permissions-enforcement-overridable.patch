@@ -1,0 +1,28 @@
+From c036a68da65f61e0371e6c5343926ecd28314396 Mon Sep 17 00:00:00 2001
+From: PixelOS vegas builder <builder@localhost>
+Date: Fri, 20 Nov 2026 18:19:40 -0800
+Subject: [PATCH] config: make privapp-permissions enforcement overridable
+
+Use an optional assignment so a product can relax it (the vegas26 GSI bring-up builds set it to log: a privileged app missing from the allowlist would otherwise abort system_server on boot). Default stays enforce.
+
+Change-Id: If928f560e7abcfc76134b62feda657dc11000151
+---
+ config/common.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/config/common.mk b/config/common.mk
+index e68aa8c..0bbf0bd 100644
+--- a/config/common.mk
++++ b/config/common.mk
+@@ -111,7 +111,7 @@ endif
+ 
+ # Enforce privapp-permissions whitelist
+ PRODUCT_PRODUCT_PROPERTIES += \
+-    ro.control_privapp_permissions=enforce
++    ro.control_privapp_permissions?=enforce
+ 
+ TARGET_DISABLE_LINEAGE_SDK = true
+ ifneq ($(TARGET_DISABLE_LINEAGE_SDK), true)
+-- 
+2.43.0
+

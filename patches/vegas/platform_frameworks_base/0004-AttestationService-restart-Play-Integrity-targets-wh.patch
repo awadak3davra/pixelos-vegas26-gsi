@@ -1,0 +1,127 @@
+From 5c9082c10346682fa565948e591b8bde61625404 Mon Sep 17 00:00:00 2001
+From: PixelOS vegas builder <builder@localhost>
+Date: Sat, 21 Nov 2026 11:33:48 -0800
+Subject: [PATCH 4/4] AttestationService: restart Play Integrity targets when
+ PIF config changes
+
+The certified props are applied when DroidGuard or the Play Store starts,
+so kill those processes when pif_data changes, or when fetched_pif changes
+while no user config overrides it (as crDroid's AxSpoofManagerService does).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Change-Id: Iaeca4b6f8119a930bd0d39688cbe5681a9a9a227
+---
+ .../server/custom/AttestationService.java     | 60 +++++++++++++++++++
+ 1 file changed, 60 insertions(+)
+
+diff --git a/services/core/java/com/android/server/custom/AttestationService.java b/services/core/java/com/android/server/custom/AttestationService.java
+index ab05fe6be..f0e8a26bd 100644
+--- a/services/core/java/com/android/server/custom/AttestationService.java
++++ b/services/core/java/com/android/server/custom/AttestationService.java
+@@ -7,17 +7,25 @@
+ 
+ package com.android.server.custom;
+ 
++import android.app.ActivityManager;
++import android.content.ContentResolver;
+ import android.content.Context;
+ import android.content.pm.PackageManager;
+ import android.content.res.Resources;
++import android.database.ContentObserver;
+ import android.net.ConnectivityManager;
+ import android.net.Network;
+ import android.net.NetworkCapabilities;
++import android.net.Uri;
+ import android.os.Environment;
++import android.os.Process;
+ import android.os.SystemProperties;
++import android.os.UserHandle;
+ import android.provider.Settings;
++import android.text.TextUtils;
+ import android.util.Log;
+ 
++import com.android.internal.os.BackgroundThread;
+ import com.android.internal.util.custom.CustomUtils;
+ import com.android.server.SystemService;
+ 
+@@ -30,6 +38,7 @@ import java.io.InputStreamReader;
+ import java.net.HttpURLConnection;
+ import java.net.URI;
+ import java.net.URL;
++import java.util.List;
+ import java.util.concurrent.Executors;
+ import java.util.concurrent.ScheduledExecutorService;
+ import java.util.concurrent.TimeUnit;
+@@ -41,6 +50,9 @@ public final class AttestationService extends SystemService {
+ 
+     private static final String DATA_FILE = "gms_certified_props.json";
+ 
++    private static final String PROCESS_GMS_UNSTABLE = "com.google.android.gms.unstable";
++    private static final String PACKAGE_FINSKY = "com.android.vending";
++
+     private static final long INITIAL_DELAY = 0;
+     private static final long INTERVAL = 5;
+ 
+@@ -65,11 +77,59 @@ public final class AttestationService extends SystemService {
+         if (!sDisableGmsProps && CustomUtils.isPackageInstalled(mContext, "com.google.android.gms")
+                 && phase == PHASE_BOOT_COMPLETED) {
+             Log.i(TAG, "Scheduling the service");
++            registerPifObserver();
+             mScheduler.scheduleAtFixedRate(
+                     new FetchGmsCertifiedProps(), INITIAL_DELAY, INTERVAL, TimeUnit.MINUTES);
+         }
+     }
+ 
++    /**
++     * The certified props are applied when a target process starts, so restart DroidGuard
++     * and the Play Store whenever the effective config changes (crDroid AxSpoofManager).
++     */
++    private void registerPifObserver() {
++        final ContentResolver resolver = mContext.getContentResolver();
++        final ContentObserver observer = new ContentObserver(BackgroundThread.getHandler()) {
++            @Override
++            public void onChange(boolean selfChange, Uri uri) {
++                final String key = uri == null ? null : uri.getLastPathSegment();
++                if (key == null) return;
++                if (Settings.Secure.FETCHED_PIF.equals(key) && !TextUtils.isEmpty(
++                        Settings.Secure.getString(resolver, Settings.Secure.PIF_DATA))) {
++                    dlog("Fetched props changed, user PIF data still in effect");
++                    return;
++                }
++                Log.i(TAG, "PIF config changed (" + key + "), restarting target processes");
++                restartPifTargets();
++            }
++        };
++        for (String key : new String[] {
++                Settings.Secure.PIF_DATA, Settings.Secure.FETCHED_PIF }) {
++            resolver.registerContentObserver(Settings.Secure.getUriFor(key), false, observer,
++                    UserHandle.USER_ALL);
++        }
++    }
++
++    private void restartPifTargets() {
++        try {
++            final ActivityManager am = mContext.getSystemService(ActivityManager.class);
++            final List<ActivityManager.RunningAppProcessInfo> procs =
++                    am == null ? null : am.getRunningAppProcesses();
++            if (procs == null) return;
++            for (ActivityManager.RunningAppProcessInfo proc : procs) {
++                final String name = proc.processName;
++                if (name == null) continue;
++                if (name.equals(PROCESS_GMS_UNSTABLE) || name.equals(PACKAGE_FINSKY)
++                        || name.startsWith(PACKAGE_FINSKY + ":")) {
++                    Log.i(TAG, "Killing " + name + " (pid " + proc.pid + ")");
++                    Process.killProcess(proc.pid);
++                }
++            }
++        } catch (Throwable t) {
++            Log.w(TAG, "Failed to restart PIF target processes", t);
++        }
++    }
++
+     private String fetchProps() {
+         try {
+             URL url = new URI(API).toURL();
+-- 
+2.43.0
+

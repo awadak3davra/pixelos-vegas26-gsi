@@ -1,0 +1,12 @@
+// vegas26 Moto Actions replacement: chop chop -> flashlight (see NOTES.md)
+android_app {
+    name: "VegasActions",
+    srcs: ["src/**/*.java"],
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+    optimize: {
+        enabled: false,
+    },
+}

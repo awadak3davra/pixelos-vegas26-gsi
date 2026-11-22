@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- vegas26: priv-app permissions missing from the shipped allowlists (found by
+     pixelos-80-privapp.py against the image). Needed for user builds, where
+     ro.control_privapp_permissions=enforce aborts system_server on a gap. -->
+<permissions>
+    <privapp-permissions package="com.google.android.deskclock">
+        <permission name="android.permission.SCHEDULE_EXACT_ALARM" />
+    </privapp-permissions>
+</permissions>

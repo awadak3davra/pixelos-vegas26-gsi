@@ -1,0 +1,11 @@
+# TrebleDroid patches deliberately not applied to the vegas26 (Moto G Power 2026, MT6835, kernel 5.15) build.
+# Format: <set>/<dir>/<file>  # reason
+trebledroid/platform_frameworks_base/0029-Call-Samsung-s-ISehSysInputDev-to-report-screen-stat.patch  # Samsung-only HAL
+trebledroid/platform_frameworks_base/0037-FOD-support-for-Asus-Samsung-recent-Xiaomi-and-RedMa.patch  # under-display FP; vegas26 has a side-mounted sensor
+trebledroid/platform_frameworks_base/0042-Add-support-for-Samsung-full-brightness-on-their-AID.patch  # Samsung-only
+trebledroid/platform_frameworks_base/0043-Add-Samsung-sysinput.patch  # Samsung-only
+trebledroid/platform_frameworks_base/0044-Bunch-of-FOD-stuff-commonize-refreshing-the-services.patch  # FOD, depends on 0037
+trebledroid-staging/platform_frameworks_base/0011-fall-back-to-sysfs-touch-poke-when-samsung-sysinput-.patch  # depends on Samsung sysinput (0043)
+trebledroid-staging/platform_system_core/0002-Restore-old-kernel-support-in-init-and-libprocessgro.patch  # pre-4.x kernels; vegas26 runs 5.15
+vegas/platform_build/0001-Dont-handle-apns.patch  # PixelOS build/make already guards the sample APN copy with $(CUSTOM_BUILD)
+trebledroid/platform_frameworks_base/0049-Don-t-crash-system_server-if-we-fail-to-parse-dynami.patch  # wraps FOD code added by 0037 (skipped)

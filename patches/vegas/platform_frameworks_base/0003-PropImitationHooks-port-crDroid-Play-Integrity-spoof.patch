@@ -1,0 +1,1164 @@
+From d51d244cf9c7297e4306de2069535d26c8187395 Mon Sep 17 00:00:00 2001
+From: PixelOS vegas builder <builder@localhost>
+Date: Sat, 21 Nov 2026 11:33:47 -0800
+Subject: [PATCH 3/4] PropImitationHooks: port crDroid Play Integrity spoofing
+
+Bring the Play Integrity handling of crDroid 16.0
+(core/java/android/security/pif/PlayIntegritySpoofService.java and the
+property area virtualization in core/jni/android_os_SystemProperties.cpp)
+into PixelOS's PropImitationHooks:
+
+- PIF config from Settings.Secure pif_data (user), else fetched_pif
+  (AttestationService), else the overlay array; JSON or key=value format,
+  Build and Build.VERSION fields with or without the VERSION. prefix,
+  system properties and the PlayIntegrityFork options spoofBuild,
+  spoofProps, spoofVendingBuild, spoofVendingSdk, verboseLogs.
+- Missing Build fields are derived from FINGERPRINT, and
+  DEVICE_INITIAL_SDK_INT from the config or the device codename.
+- In com.google.android.gms.unstable the process' property areas are
+  remapped copy-on-write and patched, so native and Java property reads
+  see the certified fingerprint, id, product, model, security patch,
+  first API level, init.svc.adbd=stopped and sys.usb.state=mtp.
+- One debug log line per target process says what was applied.
+
+Key attestation stays refused for DroidGuard through
+onEngineGetCertificateChain, as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Change-Id: I59c4943d4f841ec2ff4f8854bb6b27f61c2eaf51
+---
+ .../internal/util/PropImitationHooks.java     | 428 ++++++++++---
+ core/jni/android_os_SystemProperties.cpp      | 568 +++++++++++++++++-
+ 2 files changed, 926 insertions(+), 70 deletions(-)
+
+diff --git a/core/java/com/android/internal/util/PropImitationHooks.java b/core/java/com/android/internal/util/PropImitationHooks.java
+index 901392220..b9f724074 100644
+--- a/core/java/com/android/internal/util/PropImitationHooks.java
++++ b/core/java/com/android/internal/util/PropImitationHooks.java
+@@ -2,6 +2,8 @@
+  * Copyright (C) 2022-2024 Paranoid Android
+  *           (C) 2023 ArrowOS
+  *           (C) 2023 The LibreMobileOS Foundation
++ *           (C) 2025-2026 crDroid Android Project (Play Integrity config parsing
++ *               and property area virtualization, PlayIntegritySpoofService)
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+@@ -26,27 +28,21 @@ import android.content.Context;
+ import android.content.res.Resources;
+ import android.os.Build;
+ import android.os.Binder;
+-import android.os.Environment;
+ import android.os.Process;
+ import android.os.SystemProperties;
+ import android.provider.Settings;
+ import android.text.TextUtils;
++import android.util.JsonReader;
+ import android.util.Log;
+ 
+ import com.android.internal.R;
+ import com.android.internal.util.custom.KeyProviderManager;
+ 
+-import org.json.JSONException;
+-import org.json.JSONObject;
+-
+-import java.io.BufferedReader;
+-import java.io.File;
+-import java.io.FileReader;
+-import java.io.IOException;
++import java.io.StringReader;
+ import java.lang.reflect.Field;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+-import java.util.Iterator;
++import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Map;
+@@ -65,7 +61,6 @@ public class PropImitationHooks {
+ 
+     private static final Boolean sDisableKeyAttestationBlock = SystemProperties.getBoolean(
+             "persist.sys.pihooks.disable.gms_key_attestation_block", false);
+-    private static final String DATA_FILE = "gms_certified_props.json";
+ 
+     private static final String PACKAGE_ARCORE = "com.google.ar.core";
+     private static final String PACKAGE_FINSKY = "com.android.vending";
+@@ -113,12 +108,32 @@ public class PropImitationHooks {
+         "PIXEL_2024_MIDYEAR_EXPERIENCE"
+     );
+ 
+-    private static volatile List<String> sCertifiedProps = new ArrayList<>();
+     private static volatile String sStockFp, sNetflixModel;
+ 
+     private static volatile String sProcessName;
+     private static volatile boolean sIsGms, sIsFinsky, sIsPhotos;
+ 
++    /*
++     * Play Integrity config (PIF). Sources, first non-empty wins:
++     *   Settings.Secure.PIF_DATA     user supplied (Developer options or settings put)
++     *   Settings.Secure.FETCHED_PIF  fetched by AttestationService
++     *   R.array.config_certifiedBuildProperties  overlay, FIELD:value lines
++     * Accepted formats: JSON object, or PlayIntegrityFork style key=value lines.
++     * Keys: Build or Build.VERSION field names (a "VERSION." prefix is accepted),
++     * system properties (anything with a dot, "*suffix" matches by suffix), and the
++     * PlayIntegrityFork options spoofBuild, spoofProps, spoofVendingBuild,
++     * spoofVendingSdk, verboseLogs and DEBUG.
++     */
++    private static final Map<String, String> sPifBuildFields = new LinkedHashMap<>();
++    private static final Map<String, String> sPifSystemProps = new LinkedHashMap<>();
++    private static String sPifSource = "none";
++    private static String sPifDeviceInitialSdkInt = "";
++    private static boolean sPifSpoofBuild = true;
++    private static boolean sPifSpoofProps = true;
++    private static boolean sPifSpoofVendingBuild = false;
++    private static boolean sPifSpoofVendingSdk = false;
++    private static int sPifVerboseLogs = 0;
++
+     public static void setProps(Context context) {
+         final String packageName = context.getPackageName();
+         final String processName = Application.getProcessName();
+@@ -165,21 +180,55 @@ public class PropImitationHooks {
+         }
+     }
+ 
+-    private static void setPropValue(String key, String value) {
++    /** Field of Build, or of Build.VERSION for a "VERSION." key or a name only VERSION has. */
++    private static Field findBuildField(String key) {
++        Class<?> clazz = Build.class;
++        if (key.startsWith("VERSION.")) {
++            clazz = Build.VERSION.class;
++            key = key.substring(8);
++        }
++        try {
++            return clazz.getDeclaredField(key);
++        } catch (NoSuchFieldException e) {
++            if (clazz != Build.class) return null;
++        }
++        try {
++            return Build.VERSION.class.getDeclaredField(key);
++        } catch (NoSuchFieldException e) {
++            return null;
++        }
++    }
++
++    private static boolean setPropValue(String key, String value) {
+         try {
+-            dlog("Setting prop " + key + " to " + value.toString());
+-            Class clazz = Build.class;
+-            if (key.startsWith("VERSION.")) {
+-                clazz = Build.VERSION.class;
+-                key = key.substring(8);
++            final Field field = findBuildField(key);
++            if (field == null) {
++                Log.w(TAG, "No Build field for " + key);
++                return false;
++            }
++            final Class<?> type = field.getType();
++            final Object newValue;
++            if (type == Integer.TYPE) {
++                newValue = Integer.parseInt(value);
++            } else if (type == Long.TYPE) {
++                newValue = Long.parseLong(value);
++            } else if (type == Boolean.TYPE) {
++                newValue = Boolean.parseBoolean(value);
++            } else if (type == String.class) {
++                newValue = value;
++            } else {
++                Log.w(TAG, "Unsupported type " + type.getSimpleName() + " for " + key);
++                return false;
+             }
+-            Field field = clazz.getDeclaredField(key);
+             field.setAccessible(true);
+-            // Cast the value to int if it's an integer field, otherwise string.
+-            field.set(null, field.getType().equals(Integer.TYPE) ? Integer.parseInt(value) : value);
++            final Object oldValue = field.get(null);
++            field.set(null, newValue);
+             field.setAccessible(false);
++            dlog("Setting prop " + key + ": " + oldValue + " -> " + value);
++            return true;
+         } catch (Exception e) {
+             Log.e(TAG, "Failed to set prop " + key, e);
++            return false;
+         }
+     }
+ 
+@@ -195,32 +244,7 @@ public class PropImitationHooks {
+             return;
+         }
+ 
+-        String savedProps = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.PIF_DATA);
+-        if (savedProps == null || TextUtils.isEmpty(savedProps)) {
+-            savedProps = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.FETCHED_PIF);
+-        }
+-
+-        if (savedProps == null || TextUtils.isEmpty(savedProps)) {
+-            dlog("Parsing props locally - fetched pif / user provided pif unavailable");
+-            sCertifiedProps = Arrays.asList(context.getResources().getStringArray(R.array.config_certifiedBuildProperties));
+-        } else {
+-            dlog("Parsing props fetched / provided by user");
+-            try {
+-                JSONObject parsedProps = new JSONObject(savedProps);
+-                Iterator<String> keys = parsedProps.keys();
+-                while (keys.hasNext()) {
+-                    String key = keys.next();
+-                    String value = parsedProps.getString(key);
+-                    sCertifiedProps.add(key + ":" + value);
+-                }
+-            } catch (JSONException e) {
+-                Log.e(TAG, "Error parsing JSON data", e);
+-                dlog("Parsing props locally as fallback");
+-                sCertifiedProps = Arrays.asList(context.getResources().getStringArray(R.array.config_certifiedBuildProperties));
+-            }
+-        }
+-
+-        if (sCertifiedProps.isEmpty()) {
++        if (!loadPifConfig(context)) {
+             dlog("Certified props are not set");
+             return;
+         }
+@@ -240,7 +264,7 @@ public class PropImitationHooks {
+ 
+         if (!was) {
+             dlog("Spoofing build for GMS / Finsky");
+-            setCertifiedProps();
++            applyPifConfig();
+         } else {
+             dlog("Skip spoofing build for GMS / Finsky, because GmsAddAccountActivityOnTop");
+         }
+@@ -252,35 +276,305 @@ public class PropImitationHooks {
+         }
+     }
+ 
+-    private static void setCertifiedProps() {
+-        for (String entry : sCertifiedProps) {
+-            // Each entry must be of the format FIELD:value
+-            final String[] fieldAndProp = entry.split(":", 2);
+-            if (fieldAndProp.length != 2) {
+-                Log.e(TAG, "Invalid entry in certified props: " + entry);
+-                continue;
++    private static boolean loadPifConfig(Context context) {
++        boolean loaded = false;
++        for (String source : new String[] {
++                Settings.Secure.PIF_DATA, Settings.Secure.FETCHED_PIF }) {
++            final String content = Settings.Secure.getString(
++                    context.getContentResolver(), source);
++            if (TextUtils.isEmpty(content)) continue;
++            sPifSource = source;
++            sPifBuildFields.clear();
++            sPifSystemProps.clear();
++            final String trimmed = content.trim();
++            final boolean ok = trimmed.startsWith("{") ? parseJson(trimmed) : parseProp(trimmed);
++            if (ok && !(sPifBuildFields.isEmpty() && sPifSystemProps.isEmpty())) {
++                loaded = true;
++                break;
+             }
+-            setPropValue(fieldAndProp[0], fieldAndProp[1]);
++            Log.e(TAG, "Unusable PIF config in " + source + ", ignoring it");
+         }
++        if (!loaded) {
++            sPifSource = "overlay";
++            resetPifOptions();
++            sPifBuildFields.clear();
++            sPifSystemProps.clear();
++            for (String entry : context.getResources().getStringArray(
++                    R.array.config_certifiedBuildProperties)) {
++                // Each entry must be of the format FIELD:value
++                final String[] fieldAndProp = entry.split(":", 2);
++                if (fieldAndProp.length != 2) {
++                    Log.e(TAG, "Invalid entry in certified props: " + entry);
++                    continue;
++                }
++                processPifKeyValue(fieldAndProp[0].trim(), fieldAndProp[1].trim());
++            }
++        }
++
++        final String fingerprint = sPifBuildFields.get("FINGERPRINT");
++        if (!TextUtils.isEmpty(fingerprint)) {
++            expandFingerprint(fingerprint);
++        }
++        if (sPifBuildFields.isEmpty() && sPifSystemProps.isEmpty()) {
++            return false;
++        }
++        sPifBuildFields.put("DEVICE_INITIAL_SDK_INT",
++                resolveDeviceInitialSdk(sPifBuildFields.get("DEVICE"), sPifDeviceInitialSdkInt));
++        return true;
+     }
+ 
+-    private static String readFromFile(File file) {
+-        StringBuilder content = new StringBuilder();
++    private static void resetPifOptions() {
++        sPifSpoofBuild = true;
++        sPifSpoofProps = true;
++        sPifSpoofVendingBuild = false;
++        sPifSpoofVendingSdk = false;
++        sPifVerboseLogs = 0;
++        sPifDeviceInitialSdkInt = "";
++    }
+ 
+-        if (file.exists()) {
+-            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+-                String line;
++    private static boolean parseProp(String content) {
++        resetPifOptions();
++        for (String line : content.split("\n")) {
++            line = line.trim();
++            if (line.isEmpty() || line.startsWith("#")) continue;
++            final int eq = line.indexOf('=');
++            if (eq <= 0) continue;
++            final String key = line.substring(0, eq).trim();
++            String value = line.substring(eq + 1).trim();
++            final int comment = value.indexOf('#');
++            if (comment >= 0) value = value.substring(0, comment).trim();
++            if (value.isEmpty()) continue;
++            processPifKeyValue(key, value);
++        }
++        return true;
++    }
+ 
+-                while ((line = reader.readLine()) != null) {
+-                    content.append(line);
++    private static boolean parseJson(String content) {
++        resetPifOptions();
++        try (JsonReader reader = new JsonReader(new StringReader(content))) {
++            reader.beginObject();
++            while (reader.hasNext()) {
++                final String key = reader.nextName();
++                final String value;
++                switch (reader.peek()) {
++                    case BOOLEAN:
++                        value = String.valueOf(reader.nextBoolean());
++                        break;
++                    case NULL:
++                        reader.nextNull();
++                        continue;
++                    case BEGIN_OBJECT:
++                    case BEGIN_ARRAY:
++                        reader.skipValue();
++                        continue;
++                    default:
++                        value = reader.nextString();
++                        break;
+                 }
+-            } catch (IOException e) {
+-                Log.e(TAG, "Error reading from file", e);
++                processPifKeyValue(key, value);
+             }
++            reader.endObject();
++            return true;
++        } catch (Exception e) {
++            Log.e(TAG, "Error parsing JSON data", e);
++            return false;
+         }
+-        return content.toString();
+     }
+ 
++    private static boolean isTrue(String value) {
++        return "1".equals(value) || "true".equalsIgnoreCase(value);
++    }
++
++    private static void processPifKeyValue(String key, String value) {
++        if (key.startsWith("VERSION.")) {
++            key = key.substring(8);
++        }
++        switch (key) {
++            case "verboseLogs":
++            case "VERBOSE_LOGS":
++                try {
++                    sPifVerboseLogs = Integer.parseInt(value);
++                } catch (NumberFormatException e) {
++                    sPifVerboseLogs = 0;
++                }
++                break;
++            case "DEBUG":
++                if (isTrue(value) && sPifVerboseLogs == 0) sPifVerboseLogs = 1;
++                break;
++            case "spoofBuild":
++                sPifSpoofBuild = isTrue(value);
++                break;
++            case "spoofProps":
++                sPifSpoofProps = isTrue(value);
++                break;
++            case "spoofVendingBuild":
++                sPifSpoofVendingBuild = isTrue(value);
++                break;
++            case "spoofVendingSdk":
++                sPifSpoofVendingSdk = isTrue(value);
++                break;
++            case "spoofProvider":
++            case "spoofSignature":
++            case "spoofVendingFinger":
++                // Key attestation is refused for DroidGuard unconditionally (see
++                // onEngineGetCertificateChain); signature spoofing is not ported.
++                break;
++            case "DEVICE_INITIAL_SDK_INT":
++                sPifDeviceInitialSdkInt = value;
++                break;
++            default:
++                if (key.contains(".") || key.startsWith("*")) {
++                    sPifSystemProps.put(key, value);
++                } else {
++                    sPifBuildFields.put(key, value);
++                }
++                break;
++        }
++    }
++
++    /** brand/product/device:release/id/incremental:type/tags */
++    private static void expandFingerprint(String fingerprint) {
++        final List<String> parts = new ArrayList<>();
++        final StringBuilder current = new StringBuilder();
++        for (int i = 0; i < fingerprint.length(); i++) {
++            final char ch = fingerprint.charAt(i);
++            if (ch == '/' || ch == ':') {
++                parts.add(current.toString());
++                current.setLength(0);
++            } else {
++                current.append(ch);
++            }
++        }
++        parts.add(current.toString());
++
++        final String[] keys = {
++            "BRAND", "PRODUCT", "DEVICE", "RELEASE", "ID", "INCREMENTAL", "TYPE", "TAGS"
++        };
++        for (int i = 0; i < keys.length && i < parts.size(); i++) {
++            String val = parts.get(i);
++            if (val.isEmpty()) continue;
++            // A Canary fingerprint carries "CANARY" where the release goes; keep ours.
++            if ("RELEASE".equals(keys[i]) && "CANARY".equalsIgnoreCase(val)) continue;
++            sPifBuildFields.put(keys[i], val);
++        }
++    }
++
++    private static String resolveDeviceInitialSdk(String device, String configuredSdk) {
++        if (!TextUtils.isEmpty(configuredSdk)) {
++            return configuredSdk;
++        }
++        if (device != null) {
++            switch (device) {
++                case "oriole":
++                case "raven":
++                    return "31";
++                case "bluejay":
++                    return "32";
++                case "panther":
++                case "cheetah":
++                case "lynx":
++                case "felix":
++                case "tangorpro":
++                    return "33";
++                case "shiba":
++                case "husky":
++                case "akita":
++                case "tokay":
++                case "caiman":
++                case "komodo":
++                case "comet":
++                    return "34";
++                case "tegu":
++                    return "35";
++                case "frankel":
++                case "blazer":
++                case "mustang":
++                case "rango":
++                case "stallion":
++                    return "36";
++                default:
++                    break;
++            }
++        }
++        return "32";
++    }
++
++    private static int setPifBuildFields() {
++        int n = 0;
++        for (Map.Entry<String, String> entry : sPifBuildFields.entrySet()) {
++            if (TextUtils.isEmpty(entry.getValue())) continue;
++            if (setPropValue(entry.getKey(), entry.getValue())) n++;
++        }
++        return n;
++    }
++
++    private static void putPropIfPresent(Map<String, String> map, String key, String value) {
++        if (!TextUtils.isEmpty(value)) {
++            map.putIfAbsent(key, value);
++        }
++    }
++
++    /**
++     * Makes the native property reads of this process (Java SystemProperties included)
++     * return the certified values: the property areas are remapped copy-on-write and
++     * patched in place, so nothing outside this process sees the change.
++     */
++    private static int spoofSystemProperties() {
++        final Map<String, String> props = new LinkedHashMap<>(sPifSystemProps);
++        props.putIfAbsent("init.svc.adbd", "stopped");
++        props.putIfAbsent("sys.usb.state", "mtp");
++        final String initialSdk = sPifBuildFields.get("DEVICE_INITIAL_SDK_INT");
++        putPropIfPresent(props, "ro.board.first_api_level", initialSdk);
++        putPropIfPresent(props, "ro.product.first_api_level", initialSdk);
++        putPropIfPresent(props, "ro.build.fingerprint", sPifBuildFields.get("FINGERPRINT"));
++        putPropIfPresent(props, "ro.build.id", sPifBuildFields.get("ID"));
++        putPropIfPresent(props, "ro.product.device", sPifBuildFields.get("DEVICE"));
++        putPropIfPresent(props, "ro.product.name", sPifBuildFields.get("PRODUCT"));
++        putPropIfPresent(props, "ro.product.brand", sPifBuildFields.get("BRAND"));
++        putPropIfPresent(props, "ro.product.model", sPifBuildFields.get("MODEL"));
++        final String securityPatch = sPifBuildFields.get("SECURITY_PATCH");
++        putPropIfPresent(props, "ro.build.version.security_patch", securityPatch);
++        putPropIfPresent(props, "ro.vendor.build.security_patch", securityPatch);
++        putPropIfPresent(props, "ro.system.build.security_patch", securityPatch);
++
++        final String[] keys = props.keySet().toArray(new String[0]);
++        final String[] values = props.values().toArray(new String[0]);
++        try {
++            if (nativeSpoofProperties(keys, values, sPifVerboseLogs > 0)) {
++                return keys.length;
++            }
++            Log.w(TAG, "Property area virtualization failed");
++        } catch (Throwable t) {
++            Log.e(TAG, "Failed to spoof system properties", t);
++        }
++        return 0;
++    }
++
++    private static void applyPifConfig() {
++        if (sPifVerboseLogs > 0) {
++            Log.d(TAG, "[" + sProcessName + "] PIF config from " + sPifSource + ": "
++                    + sPifBuildFields + " props=" + sPifSystemProps);
++        }
++        int fields = 0;
++        int props = 0;
++        if (sIsGms) {
++            if (sPifSpoofBuild) fields = setPifBuildFields();
++            if (sPifSpoofProps) props = spoofSystemProperties();
++        } else if (sIsFinsky) {
++            if (sPifSpoofVendingBuild) {
++                fields = setPifBuildFields();
++            } else if (sPifSpoofVendingSdk && Build.VERSION.SDK_INT > 32) {
++                if (setPropValue("SDK_INT", "32")) fields = 1;
++            }
++        }
++        Log.d(TAG, "[" + sProcessName + "] Play Integrity spoof applied from " + sPifSource
++                + ": " + fields + " Build fields, " + props + " system property rules, model="
++                + Build.MODEL + " fingerprint=" + Build.FINGERPRINT);
++    }
++
++    private static native boolean nativeSpoofProperties(
++            String[] keys, String[] values, boolean debug);
++
+     private static boolean isGmsAddAccountActivityOnTop() {
+         try {
+             final ActivityTaskManager.RootTaskInfo focusedTask =
+@@ -331,7 +625,7 @@ public class PropImitationHooks {
+ 
+         // Check stack for Play Integrity
+         if (isCallerPlayIntegrity()) {
+-            dlog("Blocked key attestation for play integrity");
++            Log.d(TAG, "[" + sProcessName + "] Blocked key attestation for play integrity");
+             throw new UnsupportedOperationException();
+         }
+     }
+@@ -351,6 +645,6 @@ public class PropImitationHooks {
+     }
+ 
+     public static void dlog(String msg) {
+-        if (DEBUG) Log.d(TAG, "[" + sProcessName + "] " + msg);
++        if (DEBUG || sPifVerboseLogs > 0) Log.d(TAG, "[" + sProcessName + "] " + msg);
+     }
+ }
+diff --git a/core/jni/android_os_SystemProperties.cpp b/core/jni/android_os_SystemProperties.cpp
+index e99d89098..b50543144 100644
+--- a/core/jni/android_os_SystemProperties.cpp
++++ b/core/jni/android_os_SystemProperties.cpp
+@@ -33,7 +33,25 @@
+ #include <nativehelper/ScopedUtfChars.h>
+ 
+ #if defined(__BIONIC__)
+-# include <sys/system_properties.h>
++#include <sys/system_properties.h>
++#include <algorithm>
++#include <cerrno>
++#include <cinttypes>
++#include <climits>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <fcntl.h>
++#include <linux/futex.h>
++#include <string>
++#include <string_view>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <sys/syscall.h>
++#include <sys/sysmacros.h>
++#include <unistd.h>
++#include <unordered_map>
++#include <vector>
+ #endif
+ 
+ namespace android {
+@@ -237,6 +255,537 @@ void SystemProperties_report_sysprop_change(JNIEnv /**env*/, jobject /*clazz*/)
+     report_sysprop_change();
+ }
+ 
++
++#if defined(__BIONIC__)
++namespace pif_prop_virt {
++
++constexpr const char* kPropertyDirectory = "/dev/__properties__/";
++constexpr size_t kPropertyDirectoryLen = 20;
++constexpr uint32_t kPropertyAreaMagic = 0x504f5250;
++constexpr uint32_t kLongPropertyFlag = 1U << 16;
++
++struct PropertyAreaHeader {
++    uint32_t bytesUsed;
++    uint32_t serial;
++    uint32_t magic;
++    uint32_t version;
++    uint32_t reserved[28];
++};
++
++struct InlinePropertyInfo {
++    uint32_t serial;
++    char value[PROP_VALUE_MAX];
++};
++
++static_assert(sizeof(PropertyAreaHeader) == 128);
++static_assert(sizeof(InlinePropertyInfo) == 4 + PROP_VALUE_MAX);
++
++struct Mapping {
++    uintptr_t start = 0;
++    uintptr_t end = 0;
++    int prot = 0;
++    uint64_t offset = 0;
++    std::string path;
++    unsigned devMajor = 0;
++    unsigned devMinor = 0;
++    uint64_t inode = 0;
++    char permLetter = 's';
++    int fd = -1;
++    bool replaced = false;
++};
++
++struct Override {
++    Mapping* mapping = nullptr;
++    uintptr_t offset = 0;
++    std::string name;
++    std::string value;
++    bool wasLong = false;
++    uintptr_t longOffset = 0;
++    size_t longLen = 0;
++};
++
++struct State {
++    std::unordered_map<std::string, std::string> exactMap;
++    std::vector<std::pair<std::string, std::string>> suffixRules;
++    bool debug = false;
++    std::vector<Mapping> mappings;
++    std::vector<Override> overrides;
++};
++
++struct MapsLine {
++    uintptr_t start = 0;
++    uintptr_t end = 0;
++    uint64_t offset = 0;
++    uint64_t inode = 0;
++    char permissions[5] = {};
++    unsigned devMajor = 0;
++    unsigned devMinor = 0;
++    std::string path;
++};
++
++bool parseMapsLine(const char* line, MapsLine& out) {
++    unsigned long start = 0;
++    unsigned long end = 0;
++    unsigned long long offset = 0;
++    unsigned long long inode = 0;
++    char permissions[5] = {};
++    char device[32] = {};
++    char path[256] = {};
++    if (sscanf(line, "%lx-%lx %4s %llx %31s %llu %255[^\n]", &start, &end, permissions, &offset,
++               device, &inode, path) != 7) {
++        return false;
++    }
++
++    std::string pathname(path);
++    const size_t first = pathname.find_first_not_of(' ');
++    if (first == std::string::npos) {
++        return false;
++    }
++    pathname.erase(0, first);
++
++    unsigned devMajor = 0;
++    unsigned devMinor = 0;
++    if (sscanf(device, "%x:%x", &devMajor, &devMinor) != 2) {
++        return false;
++    }
++
++    out.start = start;
++    out.end = end;
++    out.offset = offset;
++    out.inode = inode;
++    memcpy(out.permissions, permissions, sizeof(out.permissions));
++    out.devMajor = devMajor;
++    out.devMinor = devMinor;
++    out.path = std::move(pathname);
++    return true;
++}
++
++int protFromPermissions(const char* permissions) {
++    int prot = 0;
++    if (permissions[0] == 'r') prot |= PROT_READ;
++    if (permissions[1] == 'w') prot |= PROT_WRITE;
++    if (permissions[2] == 'x') prot |= PROT_EXEC;
++    return prot;
++}
++
++bool parseMappings(std::vector<Mapping>& mappings, bool debug) {
++    FILE* maps = fopen("/proc/self/maps", "r");
++    if (maps == nullptr) {
++        ALOGE("[PROP-VIRT] cannot open /proc/self/maps: %s", strerror(errno));
++        return false;
++    }
++
++    char line[512];
++    while (fgets(line, sizeof(line), maps) != nullptr) {
++        MapsLine entry = {};
++        if (!parseMapsLine(line, entry) ||
++            strncmp(entry.path.c_str(), kPropertyDirectory, kPropertyDirectoryLen) != 0) {
++            continue;
++        }
++
++        const int prot = protFromPermissions(entry.permissions);
++        if ((prot & PROT_READ) == 0 || entry.start >= entry.end || entry.offset != 0) {
++            continue;
++        }
++
++        auto* header = reinterpret_cast<const PropertyAreaHeader*>(entry.start);
++        const size_t length = entry.end - entry.start;
++        if (length < sizeof(*header) || header->magic != kPropertyAreaMagic ||
++            header->bytesUsed < sizeof(*header) || header->bytesUsed > length) {
++            continue;
++        }
++
++        mappings.push_back({
++                .start = entry.start,
++                .end = entry.end,
++                .prot = prot,
++                .offset = entry.offset,
++                .path = std::move(entry.path),
++                .devMajor = entry.devMajor,
++                .devMinor = entry.devMinor,
++                .inode = entry.inode,
++                .permLetter = entry.permissions[3],
++        });
++    }
++
++    fclose(maps);
++    if (mappings.empty()) {
++        ALOGE("[PROP-VIRT] no valid property areas found");
++        return false;
++    }
++    if (debug) {
++        ALOGD("[PROP-VIRT] parsed %zu property area mappings", mappings.size());
++    }
++    return true;
++}
++
++Mapping* mappingFor(State& state, const prop_info* info) {
++    const uintptr_t address = reinterpret_cast<uintptr_t>(info);
++    for (auto& mapping : state.mappings) {
++        if (address >= mapping.start && address + sizeof(InlinePropertyInfo) <= mapping.end) {
++            return &mapping;
++        }
++    }
++    return nullptr;
++}
++
++const char* overrideFor(const State& state, const char* name) {
++    auto it = state.exactMap.find(name);
++    if (it != state.exactMap.end() && !it->second.empty()) {
++        return it->second.c_str();
++    }
++    const size_t nameLen = strlen(name);
++    for (const auto& [suffix, val] : state.suffixRules) {
++        if (!val.empty() && nameLen >= suffix.size() &&
++            strcmp(name + nameLen - suffix.size(), suffix.c_str()) == 0) {
++            return val.c_str();
++        }
++    }
++    return nullptr;
++}
++
++void enumerateProperty(void* cookie, const char* name, const char* value, uint32_t serial) {
++    auto* state = static_cast<State*>(cookie);
++    if (name == nullptr) {
++        return;
++    }
++
++    const char* replacement = overrideFor(*state, name);
++    if (replacement == nullptr) {
++        return;
++    }
++    if (strlen(replacement) >= PROP_VALUE_MAX) {
++        ALOGE("[PROP-VIRT] %s override exceeds PROP_VALUE_MAX; skipping", name);
++        return;
++    }
++
++    const prop_info* info = __system_property_find(name);
++    if (info == nullptr) {
++        ALOGE("[PROP-VIRT] %s not found; skipping", name);
++        return;
++    }
++    Mapping* mapping = mappingFor(*state, info);
++    if (mapping == nullptr) {
++        ALOGE("[PROP-VIRT] %s has no validated owning area; skipping", name);
++        return;
++    }
++
++    Override entry{.mapping = mapping,
++                   .offset = reinterpret_cast<uintptr_t>(info) - mapping->start,
++                   .name = name,
++                   .value = replacement};
++    if ((serial & kLongPropertyFlag) != 0) {
++        if (state->debug) {
++            ALOGD("[PROP-VIRT] %s is long-encoded; demoting to inline", name);
++        }
++        const uintptr_t infoAddr = reinterpret_cast<uintptr_t>(info);
++        const uintptr_t valueAddr = reinterpret_cast<uintptr_t>(value);
++        if (valueAddr >= infoAddr + sizeof(InlinePropertyInfo)) {
++            entry.wasLong = true;
++            entry.longOffset = valueAddr - infoAddr;
++            entry.longLen = strlen(value);
++        }
++    }
++    state->overrides.push_back(std::move(entry));
++}
++
++void enumerateCallback(const prop_info* info, void* cookie) {
++    if (info == nullptr) {
++        return;
++    }
++    __system_property_read_callback(info, enumerateProperty, cookie);
++}
++
++void warmupCallback(const prop_info*, void*) {}
++
++bool preflightOpen(Mapping& mapping) {
++    mapping.fd = open(mapping.path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
++    if (mapping.fd < 0) {
++        ALOGE("[PROP-VIRT] cannot open %s: %s", mapping.path.c_str(), strerror(errno));
++        return false;
++    }
++
++    struct stat st = {};
++    if (fstat(mapping.fd, &st) != 0) {
++        ALOGE("[PROP-VIRT] cannot stat %s: %s", mapping.path.c_str(), strerror(errno));
++        return false;
++    }
++    if (major(st.st_dev) != mapping.devMajor || minor(st.st_dev) != mapping.devMinor ||
++        static_cast<uint64_t>(st.st_ino) != mapping.inode) {
++        ALOGE("[PROP-VIRT] %s identity mismatch", mapping.path.c_str());
++        return false;
++    }
++
++    PropertyAreaHeader header = {};
++    const size_t length = mapping.end - mapping.start;
++    const ssize_t readBytes = pread(mapping.fd, &header, sizeof(header), 0);
++    if (readBytes != static_cast<ssize_t>(sizeof(header)) || header.magic != kPropertyAreaMagic ||
++        header.bytesUsed < sizeof(header) || header.bytesUsed > length) {
++        ALOGE("[PROP-VIRT] %s failed area header revalidation", mapping.path.c_str());
++        return false;
++    }
++    return true;
++}
++
++bool remapPrivate(Mapping& mapping) {
++    const size_t length = mapping.end - mapping.start;
++    mapping.replaced = true;
++    void* remapped = mmap(reinterpret_cast<void*>(mapping.start), length,
++                          PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, mapping.fd, 0);
++    if (remapped == MAP_FAILED) {
++        ALOGE("[PROP-VIRT] private remap failed for %s: %s", mapping.path.c_str(), strerror(errno));
++        return false;
++    }
++    return true;
++}
++
++bool applyOverride(const Mapping& mapping, const Override& override) {
++    const size_t length = mapping.end - mapping.start;
++    if (override.offset + sizeof(InlinePropertyInfo) > length) {
++        return false;
++    }
++
++    auto* info = reinterpret_cast<InlinePropertyInfo*>(mapping.start + override.offset);
++
++    if (override.wasLong) {
++        const size_t residueStart = override.offset + override.longOffset;
++        if (residueStart < override.offset || override.longLen >= length ||
++            residueStart + override.longLen + 1 > length) {
++            return false;
++        }
++        memset(reinterpret_cast<void*>(mapping.start + residueStart), 0,
++               override.longLen + 1);
++    }
++
++    const uint32_t len = static_cast<uint32_t>(override.value.size());
++    const uint32_t oldSerial = __atomic_load_n(&info->serial, __ATOMIC_RELAXED);
++    const uint32_t serialDirty = oldSerial | 1U;
++    __atomic_store_n(&info->serial, serialDirty, __ATOMIC_RELAXED);
++    memset(info->value, 0, sizeof(info->value));
++    memcpy(info->value, override.value.c_str(), len + 1);
++
++    __atomic_thread_fence(__ATOMIC_RELEASE);
++
++    constexpr uint32_t kCounterMask = 0x00ffffffU & ~kLongPropertyFlag;
++    const uint32_t lenFlags = (len << 24) & 0xff000000U;
++    const uint32_t visible = lenFlags | ((serialDirty + 1U) & kCounterMask);
++    __atomic_store_n(&info->serial, visible, __ATOMIC_RELAXED);
++    syscall(SYS_futex, &info->serial, FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0);
++
++    __atomic_thread_fence(__ATOMIC_RELEASE);
++    const uint32_t hidden = lenFlags | ((serialDirty & ~1U) & kCounterMask);
++    __atomic_store_n(&info->serial, hidden, __ATOMIC_RELAXED);
++    return true;
++}
++
++bool verifyMappingsIdentity(const std::vector<Mapping*>& affected) {
++    FILE* maps = fopen("/proc/self/maps", "r");
++    if (maps == nullptr) {
++        ALOGE("[PROP-VIRT] cannot reopen /proc/self/maps: %s", strerror(errno));
++        return false;
++    }
++
++    std::vector<Mapping*> pending = affected;
++    bool ok = true;
++    char line[512];
++    while (!pending.empty() && fgets(line, sizeof(line), maps) != nullptr) {
++        MapsLine entry = {};
++        if (!parseMapsLine(line, entry)) {
++            continue;
++        }
++        auto it = std::find_if(pending.begin(), pending.end(),
++                               [&](const Mapping* m) { return m->start == entry.start; });
++        if (it == pending.end()) {
++            continue;
++        }
++        const Mapping& mapping = **it;
++        pending.erase(it);
++
++        const char access[4] = {
++                (mapping.prot & PROT_READ) != 0 ? 'r' : '-',
++                (mapping.prot & PROT_WRITE) != 0 ? 'w' : '-',
++                (mapping.prot & PROT_EXEC) != 0 ? 'x' : '-',
++                '\0',
++        };
++
++        const bool match = entry.end == mapping.end && entry.offset == 0 &&
++                           entry.devMajor == mapping.devMajor && entry.devMinor == mapping.devMinor &&
++                           entry.inode == mapping.inode && entry.path == mapping.path &&
++                           entry.permissions[3] == 'p' &&
++                           strncmp(entry.permissions, access, 3) == 0;
++        if (!match) {
++            ALOGE("[PROP-VIRT] identity check failed for %s", mapping.path.c_str());
++            ok = false;
++        }
++    }
++    fclose(maps);
++
++    for (const Mapping* mapping : pending) {
++        ALOGE("[PROP-VIRT] VMA at start=%p for %s vanished from /proc/self/maps",
++              reinterpret_cast<void*>(mapping->start), mapping->path.c_str());
++        ok = false;
++    }
++    return ok;
++}
++
++void cleanup(std::vector<Mapping>& mappings) {
++    for (auto& mapping : mappings) {
++        if (mapping.fd >= 0) {
++            close(mapping.fd);
++            mapping.fd = -1;
++        }
++    }
++}
++
++void rollback(std::vector<Mapping>& mappings, bool debug) {
++    for (auto& mapping : mappings) {
++        if (!mapping.replaced || mapping.fd < 0) continue;
++        const int flags = MAP_FIXED | (mapping.permLetter == 's' ? MAP_SHARED : MAP_PRIVATE);
++        void* restored = mmap(reinterpret_cast<void*>(mapping.start), mapping.end - mapping.start,
++                              mapping.prot, flags, mapping.fd, 0);
++        if (debug) {
++            ALOGD("[PROP-VIRT] rollback %s %s", mapping.path.c_str(),
++                  restored == MAP_FAILED ? "failed" : "ok");
++        }
++        if (restored != MAP_FAILED) {
++            mapping.replaced = false;
++        }
++    }
++}
++
++bool install(State& state) {
++    __system_property_foreach(warmupCallback, nullptr);
++    if (!parseMappings(state.mappings, state.debug)) {
++        return false;
++    }
++    if (__system_property_foreach(enumerateCallback, &state) != 0) {
++        ALOGE("[PROP-VIRT] property enumeration failed");
++        return false;
++    }
++    if (state.overrides.empty()) {
++        ALOGE("[PROP-VIRT] no configured property rules matched");
++        return false;
++    }
++
++    std::vector<Mapping*> affected;
++    for (const auto& override : state.overrides) {
++        Mapping* mapping = override.mapping;
++        if (mapping == nullptr) {
++            cleanup(state.mappings);
++            return false;
++        }
++        if (std::find(affected.begin(), affected.end(), mapping) == affected.end()) {
++            affected.push_back(mapping);
++        }
++    }
++
++    for (Mapping* mapping : affected) {
++        if (!preflightOpen(*mapping)) {
++            cleanup(state.mappings);
++            return false;
++        }
++    }
++
++    for (Mapping* mapping : affected) {
++        if (!remapPrivate(*mapping)) {
++            rollback(state.mappings, state.debug);
++            cleanup(state.mappings);
++            return false;
++        }
++    }
++
++    for (const auto& override : state.overrides) {
++        if (override.mapping == nullptr || !applyOverride(*override.mapping, override)) {
++            ALOGE("[PROP-VIRT] cannot patch %s", override.name.c_str());
++            rollback(state.mappings, state.debug);
++            cleanup(state.mappings);
++            return false;
++        }
++    }
++
++    for (Mapping* mapping : affected) {
++        if (mprotect(reinterpret_cast<void*>(mapping->start), mapping->end - mapping->start,
++                     mapping->prot) != 0) {
++            ALOGE("[PROP-VIRT] cannot restore protections on %s: %s", mapping->path.c_str(),
++                  strerror(errno));
++            rollback(state.mappings, state.debug);
++            cleanup(state.mappings);
++            return false;
++        }
++    }
++
++    for (const auto& override : state.overrides) {
++        char value[PROP_VALUE_MAX] = {};
++        const prop_info* info = __system_property_find(override.name.c_str());
++        const int valueLength = __system_property_get(override.name.c_str(), value);
++        auto* expected = reinterpret_cast<const InlinePropertyInfo*>(override.mapping->start +
++                                                                     override.offset);
++        if (reinterpret_cast<const prop_info*>(expected) != info || valueLength < 0 ||
++            override.value != value || expected->value != override.value) {
++            ALOGE("[PROP-VIRT] verification failed for %s", override.name.c_str());
++            rollback(state.mappings, state.debug);
++            cleanup(state.mappings);
++            return false;
++        }
++    }
++    if (!verifyMappingsIdentity(affected)) {
++        rollback(state.mappings, state.debug);
++        cleanup(state.mappings);
++        return false;
++    }
++
++    cleanup(state.mappings);
++    if (state.debug) {
++        ALOGD("[PROP-VIRT] installed %zu overrides across %zu areas",
++              state.overrides.size(), affected.size());
++    }
++    return true;
++}
++
++}  // namespace pif_prop_virt
++#endif
++
++jboolean PropImitationHooks_nativeSpoofProperties(
++        JNIEnv* env, jclass /*clazz*/, jobjectArray keysJ, jobjectArray valuesJ, jboolean debugJ) {
++#if defined(__BIONIC__)
++    if (keysJ == nullptr || valuesJ == nullptr) {
++        return JNI_FALSE;
++    }
++    const jsize count = env->GetArrayLength(keysJ);
++    if (count <= 0 || count != env->GetArrayLength(valuesJ)) {
++        return JNI_FALSE;
++    }
++
++    pif_prop_virt::State state;
++    state.debug = (debugJ == JNI_TRUE);
++
++    for (jsize i = 0; i < count; ++i) {
++        jstring kStr = static_cast<jstring>(env->GetObjectArrayElement(keysJ, i));
++        jstring vStr = static_cast<jstring>(env->GetObjectArrayElement(valuesJ, i));
++        if (kStr != nullptr && vStr != nullptr) {
++            ScopedUtfChars kUtf(env, kStr);
++            ScopedUtfChars vUtf(env, vStr);
++            if (kUtf.c_str() != nullptr && vUtf.c_str() != nullptr && kUtf.size() > 0) {
++                if (kUtf.c_str()[0] == '*' && kUtf.size() > 1) {
++                    state.suffixRules.emplace_back(kUtf.c_str() + 1, vUtf.c_str());
++                } else {
++                    state.exactMap.emplace(kUtf.c_str(), vUtf.c_str());
++                }
++            }
++        }
++        if (kStr != nullptr) env->DeleteLocalRef(kStr);
++        if (vStr != nullptr) env->DeleteLocalRef(vStr);
++    }
++
++    return pif_prop_virt::install(state) ? JNI_TRUE : JNI_FALSE;
++#else
++    (void)env;
++    (void)keysJ;
++    (void)valuesJ;
++    (void)debugJ;
++    return JNI_FALSE;
++#endif
++}
+ }  // namespace
+ 
+ int register_android_os_SystemProperties(JNIEnv *env)
+@@ -270,8 +819,21 @@ int register_android_os_SystemProperties(JNIEnv *env)
+         { "native_report_sysprop_change", "()V",
+           (void*) SystemProperties_report_sysprop_change },
+     };
+-    return RegisterMethodsOrDie(env, "android/os/SystemProperties",
+-                                method_table, NELEM(method_table));
++    int res = RegisterMethodsOrDie(env, "android/os/SystemProperties",
++                                   method_table, NELEM(method_table));
++    const JNINativeMethod pif_methods[] = {
++        { "nativeSpoofProperties",
++          "([Ljava/lang/String;[Ljava/lang/String;Z)Z",
++          (void*) PropImitationHooks_nativeSpoofProperties },
++    };
++    jclass pifClazz = env->FindClass("com/android/internal/util/PropImitationHooks");
++    if (pifClazz != nullptr) {
++        env->RegisterNatives(pifClazz, pif_methods, NELEM(pif_methods));
++        env->DeleteLocalRef(pifClazz);
++    } else {
++        env->ExceptionClear();
++    }
++    return res;
+ }
+ 
+ }  // namespace android
+-- 
+2.43.0
+

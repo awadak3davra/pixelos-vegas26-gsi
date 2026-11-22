@@ -1,0 +1,49 @@
+// vegas26: eSIM. Stock uses Google's LPA (EuiccGoogle) plus Motorola's EuiccPartnerApp from the
+// product partition. EuiccGoogle goes through the platform EuiccCardController/EuiccPort path,
+// which sends ISD-R commands as ES10 on the MEP-A1 command port; a third-party LPA such as
+// OpenEUICC opens ISD-R with TelephonyManager and the MTK modem refuses (6A81 MISSING_RESOURCE).
+// APKs are stock blobs (see .gitignore), installed as product priv-apps like on stock.
+android_app_import {
+    name: "EuiccGoogle",
+    apk: "EuiccGoogle.apk",
+    preprocessed: true,
+    privileged: true,
+    product_specific: true,
+    dex_preopt: { enabled: false },
+    required: [
+        "privapp-permissions-com.google.android.euicc.xml",
+        "default-permissions-com.google.android.euicc.xml",
+        "EuiccPartnerApp",
+    ],
+}
+
+android_app_import {
+    name: "EuiccPartnerApp",
+    apk: "EuiccPartnerApp.apk",
+    preprocessed: true,
+    privileged: true,
+    product_specific: true,
+    dex_preopt: { enabled: false },
+    required: ["privapp-permissions-com.oem.euiccpartnerapp.xml"],
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-com.google.android.euicc.xml",
+    src: "privapp-permissions-com.google.android.euicc.xml",
+    sub_dir: "permissions",
+    product_specific: true,
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-com.oem.euiccpartnerapp.xml",
+    src: "privapp-permissions-com.oem.euiccpartnerapp.xml",
+    sub_dir: "permissions",
+    product_specific: true,
+}
+
+prebuilt_etc {
+    name: "default-permissions-com.google.android.euicc.xml",
+    src: "default-permissions-com.google.android.euicc.xml",
+    sub_dir: "default-permissions",
+    product_specific: true,
+}

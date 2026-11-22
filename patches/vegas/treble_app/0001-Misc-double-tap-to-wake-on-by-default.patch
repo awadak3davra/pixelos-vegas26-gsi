@@ -1,0 +1,42 @@
+From 9844eee868f208ff69af5853ed478c5a0f2bcd9e Mon Sep 17 00:00:00 2001
+From: vegas26 <vegas26@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 20:00:05 -0800
+Subject: [PATCH] Misc: double tap to wake on by default
+
+The app refreshes every Misc setting at startup, so the false default
+wrote persist.sys.phh.xiaomi.dt2w=0 after each boot and switched DT2W
+off on devices where it works (vegas26, after a clean install).
+---
+ app/src/main/java/me/phh/treble/app/Misc.kt | 2 +-
+ app/src/main/res/xml/pref_misc.xml          | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/app/src/main/java/me/phh/treble/app/Misc.kt b/app/src/main/java/me/phh/treble/app/Misc.kt
+index bfdbd13..876949b 100644
+--- a/app/src/main/java/me/phh/treble/app/Misc.kt
++++ b/app/src/main/java/me/phh/treble/app/Misc.kt
+@@ -259,7 +259,7 @@ object Misc: EntryStartup {
+             }
+             MiscSettings.dt2w -> {
+                 // Asus dt2w
+-                val value = sp.getBoolean(key, false)
++                val value = sp.getBoolean(key, true)
+                 val asusSvc = try { IZenMotion.getService() } catch(e: Exception) { null }
+                 if(asusSvc != null) {
+                     asusSvc.setDclickEnable(if(value) 1 else 0)
+diff --git a/app/src/main/res/xml/pref_misc.xml b/app/src/main/res/xml/pref_misc.xml
+index b19dcb2..c0b0f9e 100644
+--- a/app/src/main/res/xml/pref_misc.xml
++++ b/app/src/main/res/xml/pref_misc.xml
+@@ -256,7 +256,7 @@
+             android:title="Disable FUSE storage layer"
+             android:summary="This can (de/in)crease storage speed\nRequires a reboot" />
+         <SwitchPreference
+-            android:defaultValue="false"
++            android:defaultValue="true"
+             android:key="key_misc_dt2w"
+             android:title="Double tap to wake"
+             android:summary="Unlikely to work for you" />
+-- 
+2.43.0
+

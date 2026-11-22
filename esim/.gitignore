@@ -1,0 +1,3 @@
+# Proprietary stock blobs (Motorola product partition, W1WEOS36.48-22-3-3-4-3); copy them from a
+# stock dump: product/priv-app/EuiccGoogle, product/priv-app/EuiccPartnerApp
+*.apk

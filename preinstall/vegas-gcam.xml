@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <!-- Moto G Power 2026 (vegas, OV50D main) low-noise GCam config for MGC_9.7.047 BSG -->
+    <!-- HDR+ Enhanced (real aligned burst, not ZSL) via explicit frame counts; Google AWB OFF
+         because libpixel AWB mis-tints the OV50D (warm walls -> purple). Sensor-native AWB keeps color correct. -->
+    <string name="pref_camera_hdr_plus_key">on</string>
+    <string name="pref_camera_gawb_b_photo">0</string>
+    <string name="pref_camera_gawb_b_ns">0</string>
+    <string name="pref_camera_gawb_b_portrait">0</string>
+    <string name="frame_count_b_photo_0">15</string>
+    <string name="frame_count_b_ns_0">15</string>
+    <string name="frame_count_b_portrait_0">15</string>
+    <string name="max_hdr_plus_burst_frame_count">14</string>
+</map>
